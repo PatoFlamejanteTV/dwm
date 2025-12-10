@@ -31,6 +31,7 @@
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
@@ -43,8 +44,8 @@
 #include <X11/extensions/Xinerama.h>
 #endif /* XINERAMA */
 #include <X11/Xft/Xft.h>
-#include <X11/Xlib-xcb.h>
-#include <xcb/res.h>
+/* #include <X11/Xlib-xcb.h> */
+/* #include <xcb/res.h> */
 
 #include "drw.h"
 #include "util.h"
@@ -102,6 +103,7 @@ struct Client {
 	char name[256];
 	float mina, maxa;
 	int x, y, w, h;
+	int dx, dy;
 	int oldx, oldy, oldw, oldh;
 	int basew, baseh, incw, inch, maxw, maxh, minw, minh, hintsvalid;
 	int bw, oldbw;
@@ -256,6 +258,8 @@ static int stackpos(const Arg *arg);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void togglebar(const Arg *arg);
+static void togglebounce(const Arg *arg);
+static void bounce_update(void);
 static void togglefloating(const Arg *arg);
 static void togglescratch(const Arg *arg);
 static void togglesticky(const Arg *arg);
@@ -331,7 +335,8 @@ static Drw *drw;
 static Monitor *mons, *selmon;
 static Window root, wmcheckwin;
 
-static xcb_connection_t *xcon;
+/* static xcb_connection_t *xcon; */
+static int bounce_mode = 0;
 
 /* configuration, allows nested code to access above variables */
 #include "config.h"
@@ -1617,9 +1622,22 @@ run(void)
 	XEvent ev;
 	/* main event loop */
 	XSync(dpy, False);
-	while (running && !XNextEvent(dpy, &ev))
-		if (handler[ev.type])
-			handler[ev.type](&ev); /* call handler */
+	while (running) {
+		if (bounce_mode) {
+			while (XPending(dpy)) {
+				XNextEvent(dpy, &ev);
+				if (handler[ev.type])
+					handler[ev.type](&ev);
+			}
+			bounce_update();
+			usleep(10000);
+		} else {
+			if (!XNextEvent(dpy, &ev)) {
+				if (handler[ev.type])
+					handler[ev.type](&ev);
+			}
+		}
+	}
 }
 
 void
@@ -1811,6 +1829,8 @@ setup(void)
 	XSetWindowAttributes wa;
 	Atom utf8string;
 
+	srand(time(NULL));
+
 	/* clean up any zombies immediately */
 	sigchld(0);
 
@@ -1999,6 +2019,73 @@ togglebar(const Arg *arg)
 	updatebarpos(selmon);
 	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
 	arrange(selmon);
+}
+
+void
+togglebounce(const Arg *arg)
+{
+	Client *c;
+	Monitor *m;
+
+	bounce_mode = !bounce_mode;
+	if (bounce_mode) {
+		for (m = mons; m; m = m->next) {
+			for (c = m->clients; c; c = c->next) {
+				if (!c->isfloating)
+					c->isfloating = 1;
+				c->dx = (rand() % 11) - 5;
+				c->dy = (rand() % 11) - 5;
+				if (c->dx == 0) c->dx = 3;
+				if (c->dy == 0) c->dy = 3;
+			}
+			arrange(m);
+		}
+	} else {
+		for (m = mons; m; m = m->next) {
+			for (c = m->clients; c; c = c->next) {
+				c->isfloating = 0;
+			}
+			arrange(m);
+		}
+	}
+}
+
+void
+bounce_update(void)
+{
+	Client *c;
+	Monitor *m;
+	int moved = 0;
+
+	for (m = mons; m; m = m->next) {
+		for (c = m->clients; c; c = c->next) {
+			if (!ISVISIBLE(c)) continue;
+
+			c->x += c->dx;
+			c->y += c->dy;
+
+			if (c->x <= m->wx) {
+				c->x = m->wx;
+				c->dx = abs(c->dx);
+			} else if (c->x + WIDTH(c) >= m->wx + m->ww) {
+				c->x = m->wx + m->ww - WIDTH(c);
+				c->dx = -abs(c->dx);
+			}
+
+			if (c->y <= m->wy) {
+				c->y = m->wy;
+				c->dy = abs(c->dy);
+			} else if (c->y + HEIGHT(c) >= m->wy + m->wh) {
+				c->y = m->wy + m->wh - HEIGHT(c);
+				c->dy = -abs(c->dy);
+			}
+
+			XMoveWindow(dpy, c->win, c->x, c->y);
+			moved = 1;
+		}
+	}
+	if (moved)
+		XSync(dpy, False);
 }
 
 void
@@ -2406,34 +2493,7 @@ view(const Arg *arg)
 pid_t
 winpid(Window w)
 {
-	pid_t result = 0;
-
-	xcb_res_client_id_spec_t spec = {0};
-	spec.client = w;
-	spec.mask = XCB_RES_CLIENT_ID_MASK_LOCAL_CLIENT_PID;
-
-	xcb_generic_error_t *e = NULL;
-	xcb_res_query_client_ids_cookie_t c = xcb_res_query_client_ids(xcon, 1, &spec);
-	xcb_res_query_client_ids_reply_t *r = xcb_res_query_client_ids_reply(xcon, c, &e);
-
-	if (!r)
-		return (pid_t)0;
-
-	xcb_res_client_id_value_iterator_t i = xcb_res_query_client_ids_ids_iterator(r);
-	for (; i.rem; xcb_res_client_id_value_next(&i)) {
-		spec = i.data->spec;
-		if (spec.mask & XCB_RES_CLIENT_ID_MASK_LOCAL_CLIENT_PID) {
-			uint32_t *t = xcb_res_client_id_value_value(i.data);
-			result = *t;
-			break;
-		}
-	}
-
-	free(r);
-
-	if (result == (pid_t)-1)
-		result = 0;
-	return result;
+	return (pid_t)0;
 }
 
 pid_t
@@ -2662,8 +2722,8 @@ main(int argc, char *argv[])
 		fputs("warning: no locale support\n", stderr);
 	if (!(dpy = XOpenDisplay(NULL)))
 		die("dwm: cannot open display");
-	if (!(xcon = XGetXCBConnection(dpy)))
-		die("dwm: cannot get xcb connection\n");
+	/* if (!(xcon = XGetXCBConnection(dpy)))
+		die("dwm: cannot get xcb connection\n"); */
 	checkotherwm();
 	XrmInitialize();
 	load_xresources();
