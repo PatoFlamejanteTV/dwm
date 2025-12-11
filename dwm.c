@@ -2064,19 +2064,19 @@ bounce_update(void)
 			c->x += c->dx;
 			c->y += c->dy;
 
-			if (c->x <= m->wx) {
-				c->x = m->wx;
+			if (c->x <= c->mon->wx) {
+				c->x = c->mon->wx;
 				c->dx = abs(c->dx);
-			} else if (c->x + WIDTH(c) >= m->wx + m->ww) {
-				c->x = m->wx + m->ww - WIDTH(c);
+			} else if (c->x + WIDTH(c) >= c->mon->wx + c->mon->ww) {
+				c->x = c->mon->wx + c->mon->ww - WIDTH(c);
 				c->dx = -abs(c->dx);
 			}
 
-			if (c->y <= m->wy) {
-				c->y = m->wy;
+			if (c->y <= c->mon->wy) {
+				c->y = c->mon->wy;
 				c->dy = abs(c->dy);
-			} else if (c->y + HEIGHT(c) >= m->wy + m->wh) {
-				c->y = m->wy + m->wh - HEIGHT(c);
+			} else if (c->y + HEIGHT(c) >= c->mon->wy + c->mon->wh) {
+				c->y = c->mon->wy + c->mon->wh - HEIGHT(c);
 				c->dy = -abs(c->dy);
 			}
 
