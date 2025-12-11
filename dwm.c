@@ -2038,15 +2038,15 @@ togglebounce(const Arg *arg)
 				if (c->dx == 0) c->dx = 3;
 				if (c->dy == 0) c->dy = 3;
 			}
-			arrange(m);
 		}
+		arrange(NULL);
 	} else {
 		for (m = mons; m; m = m->next) {
 			for (c = m->clients; c; c = c->next) {
 				c->isfloating = 0;
 			}
-			arrange(m);
 		}
+		arrange(NULL);
 	}
 }
 
